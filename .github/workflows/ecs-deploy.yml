@@ -1,0 +1,60 @@
+name: ECS CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Login Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build Image
+      run: |
+        IMAGE_TAG=${{ github.sha }}
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx:$IMAGE_TAG .
+
+    - name: Push Image
+      run: |
+        IMAGE_TAG=${{ github.sha }}
+        docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx:$IMAGE_TAG
+
+    - name: Register New Task Definition
+      run: |
+        IMAGE_TAG=${{ github.sha }}
+
+        aws ecs register-task-definition \
+          --family tf-nginx-task \
+          --network-mode awsvpc \
+          --requires-compatibilities FARGATE \
+          --cpu "256" \
+          --memory "512" \
+          --container-definitions "[{
+            \"name\":\"nginx\",
+            \"image\":\"${{ secrets.DOCKER_USERNAME }}/my-nginx:$IMAGE_TAG\",
+            \"portMappings\":[{\"containerPort\":80,\"hostPort\":80}]
+          }]"
+
+    - name: Update ECS Service
+      run: |
+        aws ecs update-service \
+          --cluster tf-ecs-cluster \
+          --service tf-ecs-service \
+          --force-new-deployment
